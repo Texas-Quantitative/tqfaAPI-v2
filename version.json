@@ -1,0 +1,8 @@
+{
+  "version": "3.0.2",
+  "template": "Azure AI Foundry Agent",
+  "project": "TQFA API V2",
+  "infrastructure": "Azure Container Apps",
+  "updated": "2025-10-01T16:32:56.208128Z",
+  "deployment_ready": true
+}

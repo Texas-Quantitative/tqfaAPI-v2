@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 import csv
 import glob
@@ -148,29 +148,84 @@ class SearchIndexManager:
 
     async def _format_search_results(self, response: AsyncSearchItemPaged[Dict]) -> str:
         """
-        Format the output of search.
+        Format the output of search with enhanced source reporting.
 
         :param response: The search results.
-        :return: The formatted response string.
+        :return: The formatted response string with confidence indicators.
         """
-        results = [f"{result['token']}, source: {result['title']}" async for result in response]
-        return "\n------\n".join(results)
+        results = []
+        async for result in response:
+            # Enhanced formatting with confidence indication
+            score_info = f"(score: {result.get('@search.score', 'N/A')})" if '@search.score' in result else ""
+            formatted_result = f"DOCUMENT: {result['title']} {score_info}\nCONTENT: {result['token']}"
+            results.append(formatted_result)
+        
+        if not results:
+            return "NO DOCUMENTS FOUND - No relevant information in uploaded documents for this query."
+        
+        formatted_response = "\n" + "="*60 + "\n".join([f"\n{result}\n" + "="*60 for result in results])
+        return formatted_response + f"\n\nSEARCH SUMMARY: Found {len(results)} relevant document sections."
 
     async def semantic_search(self, message: str) -> str:
         """
-        Perform the semantic search on the search resource.
+        Perform the semantic search on the search resource with multi-query strategy.
 
         :param message: The customer question.
         :return: The context for the question.
         """
         self._raise_if_no_index()
+        
+        # Primary search with original query
         response = await self._get_client().search(
             search_text=message,
             query_type="full",
             search_fields=['token', 'title'],
             semantic_configuration_name=SearchIndexManager._SEMANTIC_CONFIG,
         )
-        return await self._format_search_results(response)
+        
+        primary_results = [result async for result in response]
+        
+        # If no results found, try alternative query strategies
+        if not primary_results:
+            # Try keyword extraction and alternative searches
+            keywords = self._extract_keywords(message)
+            if keywords:
+                alt_response = await self._get_client().search(
+                    search_text=" ".join(keywords),
+                    query_type="full", 
+                    search_fields=['token', 'title'],
+                    semantic_configuration_name=SearchIndexManager._SEMANTIC_CONFIG,
+                )
+                primary_results = [result async for result in alt_response]
+        
+        return await self._format_search_results(self._create_mock_response(primary_results))
+    
+    def _extract_keywords(self, message: str) -> List[str]:
+        """Extract key words from query for alternative search strategies."""
+        # Simple keyword extraction - remove common words
+        stop_words = {'the', 'is', 'at', 'which', 'on', 'what', 'how', 'when', 'where', 'why'}
+        words = message.lower().split()
+        keywords = [word.strip('.,?!') for word in words if word not in stop_words and len(word) > 2]
+        return keywords[:5]  # Limit to top 5 keywords
+        
+    def _create_mock_response(self, results: List[Dict]):
+        """Create mock async iterator for results."""
+        class MockAsyncIterator:
+            def __init__(self, data):
+                self.data = data
+                self.index = 0
+            
+            def __aiter__(self):
+                return self
+                
+            async def __anext__(self):
+                if self.index >= len(self.data):
+                    raise StopAsyncIteration
+                result = self.data[self.index]
+                self.index += 1
+                return result
+        
+        return MockAsyncIterator(results)
         
 
     async def search(self, message: str) -> str:
